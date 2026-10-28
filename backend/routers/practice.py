@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from routers.auth import get_current_user
 from models.schemas import SessionSubmission
 from db.supabase_client import supabase
+from quiz_utils import prepare_question
 import random
 
 router = APIRouter()
@@ -25,13 +26,11 @@ def update_adaptive_logic(
     topic: str,
     accuracy: float
 ):
-    # Get current topic performance
     perf = supabase.table("topic_performance").select("*").eq(
         "user_id", user_id
     ).eq("subject", subject).eq("topic", topic).execute()
 
     if not perf.data:
-        # Create initial record if not exists
         supabase.table("topic_performance").insert({
             "user_id": user_id,
             "subject": subject,
@@ -50,10 +49,8 @@ def update_adaptive_logic(
     below_count = current["consecutive_below_threshold"]
     sessions = current["sessions_count"]
 
-    # Update running average accuracy
     new_average = ((current["average_accuracy"] * sessions) + accuracy) / (sessions + 1)
 
-    # Apply adaptive logic
     action = "continue"
     message = "Keep going — steady progress"
 
@@ -61,7 +58,6 @@ def update_adaptive_logic(
         above_count += 1
         below_count = 0
         if above_count >= 2:
-            # Advance difficulty
             new_difficulty = get_next_difficulty(current_difficulty, "up")
             action = "advanced"
             message = f"Great work! Moving to {new_difficulty} questions"
@@ -73,22 +69,19 @@ def update_adaptive_logic(
         below_count += 1
         above_count = 0
         if below_count >= 2:
-            # Drop difficulty
             new_difficulty = get_next_difficulty(current_difficulty, "down")
             action = "remediated"
-            message = f"Let's revisit this topic with easier questions first"
+            message = "Let's revisit this topic with easier questions first"
             below_count = 0
         else:
             new_difficulty = current_difficulty
             message = "Keep practising — one more session before we adjust"
     else:
-        # Between thresholds — maintain
         above_count = 0
         below_count = 0
         new_difficulty = current_difficulty
         message = "Solid session — keep building consistency"
 
-    # Update topic performance
     supabase.table("topic_performance").update({
         "current_difficulty": new_difficulty,
         "consecutive_above_threshold": above_count,
@@ -111,27 +104,24 @@ def get_practice_questions(
     topic: str,
     user_id: str = Depends(get_current_user)
 ):
-    # Get user subject
     user = supabase.table("users").select("subject").eq("id", user_id).execute()
     if not user.data:
         raise HTTPException(status_code=404, detail="User not found")
 
     subject = user.data[0]["subject"]
 
-    # Get current difficulty for this topic
     perf = supabase.table("topic_performance").select(
         "current_difficulty"
     ).eq("user_id", user_id).eq("subject", subject).eq("topic", topic).execute()
 
     difficulty = perf.data[0]["current_difficulty"] if perf.data else "easy"
 
-    # Fetch questions for this topic and difficulty
     questions = supabase.table("questions").select("*").eq(
         "subject", subject
     ).eq("topic", topic).eq("difficulty", difficulty).execute()
 
     if not questions.data:
-        # Fallback to any difficulty if none found at current level
+        # Fall back to any difficulty if none found at the current level
         questions = supabase.table("questions").select("*").eq(
             "subject", subject
         ).eq("topic", topic).execute()
@@ -142,18 +132,16 @@ def get_practice_questions(
             detail=f"No questions found for topic: {topic}"
         )
 
-    # Sample up to 10 questions
     selected = random.sample(questions.data, min(10, len(questions.data)))
 
-    # Strip correct answers
-    for q in selected:
-        q.pop("correct_answer", None)
+    # Options are shuffled and the correct answer is stripped
+    prepared = [prepare_question(q) for q in selected]
 
     return {
         "topic": topic,
         "difficulty": difficulty,
-        "questions": selected,
-        "total": len(selected)
+        "questions": prepared,
+        "total": len(prepared)
     }
 
 
@@ -162,7 +150,6 @@ def submit_practice_session(
     submission: SessionSubmission,
     user_id: str = Depends(get_current_user)
 ):
-    # Get user subject
     user = supabase.table("users").select("subject").eq("id", user_id).execute()
     if not user.data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -170,19 +157,27 @@ def submit_practice_session(
     subject = user.data[0]["subject"]
     topic = submission.topic
 
-    # Fetch questions with correct answers
     question_ids = list(submission.answers.keys())
-    questions = supabase.table("questions").select("*").in_(
-        "id", question_ids
-    ).execute()
+    if not question_ids:
+        raise HTTPException(status_code=400, detail="No answers submitted")
+
+    # Only questions from the student's active subject count
+    questions = supabase.table("questions").select("*").eq(
+        "subject", subject
+    ).in_("id", question_ids).execute()
 
     if not questions.data:
         raise HTTPException(status_code=400, detail="No valid questions found")
 
-    # Score the session
     correct = 0
     results = []
     for q in questions.data:
+        option_text = {
+            "A": q["option_a"],
+            "B": q["option_b"],
+            "C": q["option_c"],
+            "D": q["option_d"],
+        }
         user_answer = submission.answers.get(q["id"])
         is_correct = user_answer == q["correct_answer"]
         if is_correct:
@@ -191,14 +186,15 @@ def submit_practice_session(
             "question_id": q["id"],
             "question_text": q["question_text"],
             "user_answer": user_answer,
+            "user_answer_text": option_text.get(user_answer),
             "correct_answer": q["correct_answer"],
+            "correct_answer_text": option_text[q["correct_answer"]],
             "is_correct": is_correct
         })
 
     total = len(questions.data)
     accuracy = (correct / total) * 100
 
-    # Save session to database
     supabase.table("sessions").insert({
         "user_id": user_id,
         "subject": subject,
@@ -208,7 +204,6 @@ def submit_practice_session(
         "accuracy": round(accuracy, 2)
     }).execute()
 
-    # Run adaptive logic
     adaptive_result = update_adaptive_logic(user_id, subject, topic, accuracy)
 
     return {
@@ -233,17 +228,14 @@ def get_progress(user_id: str = Depends(get_current_user)):
 
     subject = user.data[0]["subject"]
 
-    # Get all topic performance
     topic_perf = supabase.table("topic_performance").select("*").eq(
         "user_id", user_id
     ).eq("subject", subject).execute()
 
-    # Get session history
     sessions = supabase.table("sessions").select("*").eq(
         "user_id", user_id
     ).eq("subject", subject).order("created_at", desc=True).limit(10).execute()
 
-    # Calculate exam readiness
     if topic_perf.data:
         avg_accuracy = sum(t["average_accuracy"] for t in topic_perf.data) / len(topic_perf.data)
         topics_above_threshold = sum(

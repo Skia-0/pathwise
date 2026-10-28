@@ -108,3 +108,17 @@ def get_me(user_id: str = Depends(get_current_user)):
     if not result.data:
         raise HTTPException(status_code=404, detail="User not found")
     return result.data[0]
+
+
+def require_diagnostic(user_id: str = Depends(get_current_user)) -> str:
+    """Block access until the student has finished the diagnostic for their active subject."""
+    result = supabase.table("users").select("aptitude_tier").eq("id", user_id).execute()
+    if not result.data or not result.data[0]["aptitude_tier"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "diagnostic_required",
+                "message": "Complete the diagnostic quiz for your current subject first."
+            }
+        )
+    return user_id

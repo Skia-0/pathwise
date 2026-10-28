@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from routers import auth, diagnostic, studypath, practice, summariser
+from routers import auth, diagnostic, studypath, practice, summariser, subjects
+from routers.auth import require_diagnostic
 
 app = FastAPI(title="PathWise API", version="1.0.0")
 
@@ -15,10 +16,17 @@ app.add_middleware(
 
 # Register all routers
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
+app.include_router(subjects.router, prefix="/subjects", tags=["Subjects"])
 app.include_router(diagnostic.router, prefix="/diagnostic", tags=["Diagnostic"])
 app.include_router(studypath.router, prefix="/studypath", tags=["Study Path"])
-app.include_router(practice.router, prefix="/practice", tags=["Practice"])
+app.include_router(
+    practice.router,
+    prefix="/practice",
+    tags=["Practice"],
+    dependencies=[Depends(require_diagnostic)],
+)
 app.include_router(summariser.router, prefix="/summariser", tags=["Summariser"])
+
 
 @app.get("/")
 def root():

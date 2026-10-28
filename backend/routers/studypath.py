@@ -68,24 +68,20 @@ def generate_milestones(
 
     total_hours = days_available * daily_hours
 
-    # Assign weight to each topic based on diagnostic weakness
     # Weaker topics get more time
     topic_weights = {}
     for topic in topics:
         accuracy = topic_breakdown.get(topic, 50)  # default 50% if not in diagnostic
-        # Lower accuracy = higher weight = more time
         weight = max(100 - accuracy, 20)
         topic_weights[topic] = weight
 
     total_weight = sum(topic_weights.values())
 
-    # Calculate hours per topic proportionally
     topic_hours = {}
     for topic, weight in topic_weights.items():
         hours = (weight / total_weight) * total_hours
         topic_hours[topic] = max(hours, 1)  # minimum 1 hour per topic
 
-    # Generate milestone dates
     milestones = []
     current_date = today
     hours_per_day = daily_hours
@@ -95,7 +91,6 @@ def generate_milestones(
         days_needed = math.ceil(hours_needed / hours_per_day)
         target_date = current_date + timedelta(days=days_needed)
 
-        # Don't exceed exam date
         if target_date > exam_date:
             target_date = exam_date
 
@@ -116,7 +111,6 @@ def generate_study_path(
     path_data: StudyPathCreate,
     user_id: str = Depends(get_current_user)
 ):
-    # Get user details
     user = supabase.table("users").select("subject, aptitude_tier").eq("id", user_id).execute()
     if not user.data:
         raise HTTPException(status_code=404, detail="User not found")
@@ -132,15 +126,16 @@ def generate_study_path(
     subject = user_data["subject"]
     aptitude_tier = user_data["aptitude_tier"]
 
-    # Check if study path already exists
-    existing = supabase.table("study_paths").select("id").eq("user_id", user_id).execute()
+    # One study path per subject
+    existing = supabase.table("study_paths").select("id").eq(
+        "user_id", user_id
+    ).eq("subject", subject).execute()
     if existing.data:
         raise HTTPException(
             status_code=400,
-            detail="Study path already exists. Use /studypath/update to modify it."
+            detail="A study path already exists for this subject."
         )
 
-    # Get topic performance from diagnostic
     topic_perf = supabase.table("topic_performance").select(
         "topic, average_accuracy"
     ).eq("user_id", user_id).eq("subject", subject).execute()
@@ -150,7 +145,6 @@ def generate_study_path(
         for row in topic_perf.data:
             topic_breakdown[row["topic"]] = row["average_accuracy"]
 
-    # Generate milestones
     topics = get_topic_list(subject)
     milestones = generate_milestones(
         topics,
@@ -160,7 +154,6 @@ def generate_study_path(
         aptitude_tier
     )
 
-    # Save study path
     path_result = supabase.table("study_paths").insert({
         "user_id": user_id,
         "subject": subject,
@@ -173,7 +166,6 @@ def generate_study_path(
 
     study_path_id = path_result.data[0]["id"]
 
-    # Save milestones
     milestone_rows = []
     for m in milestones:
         milestone_rows.append({
@@ -200,14 +192,20 @@ def generate_study_path(
 
 @router.get("/my-path")
 def get_my_study_path(user_id: str = Depends(get_current_user)):
-    # Get study path
-    path = supabase.table("study_paths").select("*").eq("user_id", user_id).execute()
+    user = supabase.table("users").select("subject").eq("id", user_id).execute()
+    if not user.data:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    subject = user.data[0]["subject"]
+
+    path = supabase.table("study_paths").select("*").eq(
+        "user_id", user_id
+    ).eq("subject", subject).execute()
     if not path.data:
         raise HTTPException(status_code=404, detail="No study path found. Please generate one first.")
 
     study_path = path.data[0]
 
-    # Get milestones ordered by index
     milestones = supabase.table("milestones").select("*").eq(
         "study_path_id", study_path["id"]
     ).order("order_index").execute()
@@ -232,11 +230,21 @@ def complete_milestone(
     milestone_id: str,
     user_id: str = Depends(get_current_user)
 ):
-    result = supabase.table("milestones").update(
+    milestone = supabase.table("milestones").select(
+        "id, study_path_id"
+    ).eq("id", milestone_id).execute()
+    if not milestone.data:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+
+    # The milestone must belong to one of this user's study paths
+    owner = supabase.table("study_paths").select("id").eq(
+        "id", milestone.data[0]["study_path_id"]
+    ).eq("user_id", user_id).execute()
+    if not owner.data:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+
+    supabase.table("milestones").update(
         {"is_completed": True}
     ).eq("id", milestone_id).execute()
-
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Milestone not found")
 
     return {"message": "Milestone marked as complete", "milestone_id": milestone_id}

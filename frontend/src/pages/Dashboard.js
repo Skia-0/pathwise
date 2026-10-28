@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import API from '../api/axios';
+import SubjectCard from '../components/SubjectCard';
 
 function Dashboard() {
   const { user } = useAuth();
@@ -65,6 +66,8 @@ function Dashboard() {
           Start Practice Session →
         </button>
       </div>
+
+            <SubjectCard />
 
       {/* Progress Summary */}
       {progress && (

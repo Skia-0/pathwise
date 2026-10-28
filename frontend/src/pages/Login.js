@@ -12,22 +12,45 @@ function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  const describeError = (err, stage) => {
+    if (!err.response) {
+      return 'Cannot reach the server. Check that the backend is running on port 8000.';
+    }
+    const status = err.response.status;
+    const detail = err.response.data?.detail;
+    if (stage === 'login' && status === 401) {
+      return 'Invalid email or password. Please try again.';
+    }
+    const reason = typeof detail === 'string' ? detail : 'unexpected server error';
+    if (stage === 'profile') {
+      return `Signed in, but loading your profile failed (${status}: ${reason}).`;
+    }
+    return `Login failed (${status}: ${reason}).`;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
+    let token;
     try {
       const formData = new URLSearchParams();
-      formData.append('username', email);
+      formData.append('username', email.trim());
       formData.append('password', password);
 
       const tokenRes = await API.post('/auth/login', formData, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
       });
+      token = tokenRes.data.access_token;
+    } catch (err) {
+      console.error('Login request failed:', err);
+      setError(describeError(err, 'login'));
+      setLoading(false);
+      return;
+    }
 
-      const token = tokenRes.data.access_token;
-
+    try {
       const userRes = await API.get('/auth/me', {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -40,7 +63,8 @@ function Login() {
         navigate('/dashboard');
       }
     } catch (err) {
-      setError('Invalid email or password. Please try again.');
+      console.error('Profile request failed:', err);
+      setError(describeError(err, 'profile'));
     } finally {
       setLoading(false);
     }

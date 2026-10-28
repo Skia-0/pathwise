@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import API from '../api/axios';
+import { MathText, QuestionDiagram } from '../components/QuestionParts';
 
 const MATHEMATICS_TOPICS = [
   "Number and Numeration", "Fractions and Decimals", "Algebraic Expressions",
@@ -172,11 +173,11 @@ function Practice() {
               }}>
                 <span style={styles.reviewIcon}>{r.is_correct ? '✅' : '❌'}</span>
                 <div style={styles.reviewContent}>
-                  <p style={styles.reviewQuestion}>{r.question_text}</p>
+                  <p style={styles.reviewQuestion}>{<MathText text={r.question_text} />}</p>
                   {!r.is_correct && (
                     <p style={styles.reviewAnswer}>
-                      Your answer: <strong>{r.user_answer}</strong> &nbsp;|&nbsp;
-                      Correct: <strong style={{ color: '#166534' }}>{r.correct_answer}</strong>
+                      Your answer: <strong>{r.user_answer_text ? <MathText text={r.user_answer_text} /> : 'No answer'}</strong> &nbsp;|&nbsp;
+                      Correct: <strong style={{ color: '#166534' }}>{<MathText text={r.correct_answer_text} />}</strong>
                     </p>
                   )}
                 </div>
@@ -222,16 +223,19 @@ function Practice() {
         {error && <div style={styles.error}>{error}</div>}
 
         <div style={styles.questionBox}>
-          <p style={styles.questionText}>
-            <span style={styles.qNum}>Q{current + 1}.</span> {q.question_text}
-          </p>
+          <div style={styles.questionText}>
+            <span style={styles.qNum}>Q{current + 1}.</span>
+            <MathText text={q.question_text} />
+          </div>
+          <QuestionDiagram key={q.id} url={q.diagram_url} alt={q.diagram_alt} />
           <div style={styles.options}>
-            {['A', 'B', 'C', 'D'].map((letter) => {
-              const isSelected = answers[q.id] === letter;
+            {q.options.map((opt, index) => {
+              const label = ['A', 'B', 'C', 'D'][index];
+              const isSelected = answers[q.id] === opt.key;
               return (
                 <button
-                  key={letter}
-                  onClick={() => handleAnswer(q.id, letter)}
+                  key={opt.key}
+                  onClick={() => handleAnswer(q.id, opt.key)}
                   style={{
                     ...styles.option,
                     backgroundColor: isSelected ? '#1F4E79' : 'white',
@@ -239,8 +243,8 @@ function Practice() {
                     borderColor: isSelected ? '#1F4E79' : '#CBD5E1',
                   }}
                 >
-                  <span style={styles.optionLetter}>{letter}.</span>
-                  {q[`option_${letter.toLowerCase()}`]}
+                  <span style={styles.optionLetter}>{label}.</span>
+                  {<MathText text={opt.text} />}
                 </button>
               );
             })}

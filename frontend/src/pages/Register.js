@@ -3,6 +3,28 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import API from '../api/axios';
 
+const RULES = [
+  { key: 'length', text: 'At least 8 characters' },
+  { key: 'uppercase', text: 'One uppercase letter (A-Z)' },
+  { key: 'number', text: 'One number (0-9)' },
+  { key: 'special', text: 'One special character (! @ # $ % ...)' },
+];
+
+const getChecks = (password) => ({
+  length: password.length >= 8,
+  uppercase: /[A-Z]/.test(password),
+  number: /\d/.test(password),
+  special: /[^A-Za-z0-9]/.test(password),
+});
+
+const getStrength = (checks, password) => {
+  if (!password) return { label: '', color: '#CBD5E1', percent: 0 };
+  const met = Object.values(checks).filter(Boolean).length;
+  if (met <= 2) return { label: 'Weak', color: '#991B1B', percent: 33 };
+  if (met === 3) return { label: 'Medium', color: '#B45309', percent: 66 };
+  return { label: 'Strong', color: '#166534', percent: 100 };
+};
+
 function Register() {
   const [form, setForm] = useState({
     full_name: '',
@@ -16,12 +38,20 @@ function Register() {
   const { login } = useAuth();
   const navigate = useNavigate();
 
+  const checks = getChecks(form.password);
+  const strength = getStrength(checks, form.password);
+  const isStrong = Object.values(checks).every(Boolean);
+
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!isStrong) {
+      setError('Please choose a stronger password before continuing.');
+      return;
+    }
     setLoading(true);
     setError('');
 
@@ -30,7 +60,12 @@ function Register() {
       login(res.data.user, res.data.access_token);
       navigate('/diagnostic');
     } catch (err) {
-      setError(err.response?.data?.detail || 'Registration failed. Please try again.');
+      const detail = err.response?.data?.detail;
+      if (Array.isArray(detail)) {
+        setError(detail.map((d) => d.msg.replace(/^Value error, /, '')).join(' '));
+      } else {
+        setError(detail || 'Registration failed. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -88,6 +123,36 @@ function Register() {
                 {showPassword ? '🙈' : '👁️'}
               </button>
             </div>
+
+            {form.password && (
+              <div style={styles.strengthBox}>
+                <div style={styles.strengthBarBg}>
+                  <div
+                    style={{
+                      ...styles.strengthBarFill,
+                      width: `${strength.percent}%`,
+                      backgroundColor: strength.color
+                    }}
+                  />
+                </div>
+                <div style={{ ...styles.strengthLabel, color: strength.color }}>
+                  {strength.label}
+                </div>
+                <ul style={styles.rulesList}>
+                  {RULES.map((rule) => (
+                    <li
+                      key={rule.key}
+                      style={{
+                        ...styles.rule,
+                        color: checks[rule.key] ? '#166534' : '#64748B'
+                      }}
+                    >
+                      {checks[rule.key] ? '✓' : '○'} {rule.text}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
           <div style={styles.field}>
             <label style={styles.label}>Select Subject</label>
@@ -101,7 +166,15 @@ function Register() {
               <option value="physics">Elective Physics</option>
             </select>
           </div>
-          <button type="submit" style={styles.button} disabled={loading}>
+          <button
+            type="submit"
+            style={{
+              ...styles.button,
+              opacity: isStrong ? 1 : 0.5,
+              cursor: isStrong ? 'pointer' : 'not-allowed'
+            }}
+            disabled={loading || !isStrong}
+          >
             {loading ? 'Creating account...' : 'Create Account'}
           </button>
         </form>
@@ -149,10 +222,19 @@ const styles = {
     background: 'none', border: 'none', padding: '0 12px',
     cursor: 'pointer', fontSize: '16px', color: '#64748B',
   },
+  strengthBox: { marginTop: '10px' },
+  strengthBarBg: {
+    backgroundColor: '#E2E8F0', borderRadius: '4px',
+    height: '6px', overflow: 'hidden',
+  },
+  strengthBarFill: { height: '100%', borderRadius: '4px', transition: 'width 0.2s' },
+  strengthLabel: { fontSize: '13px', fontWeight: '600', margin: '6px 0' },
+  rulesList: { listStyle: 'none', margin: 0, padding: 0 },
+  rule: { fontSize: '12px', marginBottom: '3px' },
   button: {
     width: '100%', padding: '12px', backgroundColor: '#1F4E79',
     color: 'white', border: 'none', borderRadius: '4px',
-    fontSize: '15px', cursor: 'pointer', marginTop: '8px',
+    fontSize: '15px', marginTop: '8px',
   },
   error: {
     backgroundColor: '#FEE2E2', color: '#991B1B',

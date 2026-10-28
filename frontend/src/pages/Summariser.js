@@ -1,13 +1,26 @@
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import { useAuth } from '../context/AuthContext';
 import API from '../api/axios';
 
+const SUBJECT_LABELS = {
+  mathematics: 'Core Mathematics',
+  physics: 'Elective Physics',
+};
+
 function Summariser() {
+  const { user } = useAuth();
   const [text, setText] = useState('');
-  const [subject, setSubject] = useState('mathematics');
+  const [subject, setSubject] = useState(user?.subject || 'mathematics');
   const [result, setResult] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [mismatch, setMismatch] = useState(null);
   const [activeTab, setActiveTab] = useState('summarise');
 
   useEffect(() => {
@@ -23,34 +36,44 @@ function Summariser() {
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const runSummarise = async (subjectToUse) => {
     if (text.trim().length < 50) {
       setError('Please enter at least 50 characters of study material.');
       return;
     }
     setLoading(true);
     setError('');
+    setMismatch(null);
     setResult(null);
 
     try {
-      const res = await API.post('/summariser/summarise', { text, subject });
+      const res = await API.post('/summariser/summarise', { text, subject: subjectToUse });
+      setSubject(subjectToUse);
       setResult(res.data);
     } catch (err) {
-      if (err.response?.status === 503) {
-        setError('AI model is temporarily busy. Please try again in a moment.');
+      const detail = err.response?.data?.detail;
+      if (err.response?.status === 422 && detail?.code === 'subject_mismatch') {
+        setMismatch(detail);
+      } else if (err.response?.status === 503) {
+        setError('The AI model is busy right now. Please try again in a minute.');
       } else {
-        setError(err.response?.data?.detail || 'Summarisation failed. Please try again.');
+        setError(typeof detail === 'string' ? detail : 'Summarisation failed. Please try again.');
       }
     } finally {
       setLoading(false);
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    runSummarise(subject);
+  };
+
   const handleClear = () => {
     setText('');
     setResult(null);
     setError('');
+    setMismatch(null);
   };
 
   return (
@@ -62,7 +85,6 @@ function Summariser() {
         </p>
       </div>
 
-      {/* Tabs */}
       <div style={styles.tabs}>
         <button
           onClick={() => setActiveTab('summarise')}
@@ -89,6 +111,22 @@ function Summariser() {
       {activeTab === 'summarise' && (
         <div style={styles.card}>
           {error && <div style={styles.error}>{error}</div>}
+
+          {mismatch && (
+            <div style={styles.mismatch}>
+              <p style={styles.mismatchText}>{mismatch.message}</p>
+              {mismatch.detected_subject !== 'other' && (
+                <button
+                  type="button"
+                  onClick={() => runSummarise(mismatch.detected_subject)}
+                  disabled={loading}
+                  style={styles.mismatchBtn}
+                >
+                  Summarise as {SUBJECT_LABELS[mismatch.detected_subject]} instead
+                </button>
+              )}
+            </div>
+          )}
 
           {!result ? (
             <form onSubmit={handleSubmit}>
@@ -135,45 +173,24 @@ function Summariser() {
           ) : (
             <div>
               <div style={styles.resultHeader}>
-                <h3 style={styles.resultTitle}>Your WAEC Study Guide</h3>
+                <h3 style={styles.resultTitle}>
+                  Your WAEC Study Guide · {SUBJECT_LABELS[subject]}
+                </h3>
                 <button onClick={handleClear} style={styles.clearBtn}>
                   ← New Summary
                 </button>
               </div>
 
-              <div style={styles.disclaimer}>
-                ⚠️ {result.disclaimer}
-              </div>
+              <div style={styles.disclaimer}>⚠️ {result.disclaimer}</div>
 
               <div style={styles.summaryBox}>
-                {result.summary.split('\n').map((line, i) => {
-                  if (line.startsWith('# ') || line.startsWith('## ')) {
-                    return (
-                      <h3 key={i} style={styles.summaryHeading}>
-                        {line.replace(/^#+\s/, '')}
-                      </h3>
-                    );
-                  }
-                  if (line.startsWith('### ')) {
-                    return (
-                      <h4 key={i} style={styles.summarySubheading}>
-                        {line.replace(/^#+\s/, '')}
-                      </h4>
-                    );
-                  }
-                  if (line.startsWith('* ') || line.startsWith('- ')) {
-                    return (
-                      <div key={i} style={styles.summaryBullet}>
-                        • {line.replace(/^[\*\-]\s/, '')}
-                      </div>
-                    );
-                  }
-                  if (line.startsWith('---')) {
-                    return <hr key={i} style={styles.divider} />;
-                  }
-                  if (line.trim() === '') return <br key={i} />;
-                  return <p key={i} style={styles.summaryPara}>{line}</p>;
-                })}
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkMath]}
+                  rehypePlugins={[rehypeKatex]}
+                  components={mdComponents}
+                >
+                  {result.summary}
+                </ReactMarkdown>
               </div>
 
               <button onClick={handleClear} style={styles.newBtn}>
@@ -233,6 +250,15 @@ const styles = {
     padding: '10px 12px', borderRadius: '4px',
     marginBottom: '16px', fontSize: '14px'
   },
+  mismatch: {
+    backgroundColor: '#FFF7ED', border: '1px solid #FDBA74',
+    padding: '14px 16px', borderRadius: '6px', marginBottom: '16px'
+  },
+  mismatchText: { color: '#92400E', fontSize: '14px', margin: '0 0 10px 0', lineHeight: '1.5' },
+  mismatchBtn: {
+    backgroundColor: '#1F4E79', color: 'white', border: 'none',
+    padding: '8px 16px', borderRadius: '6px', cursor: 'pointer', fontSize: '13px'
+  },
   field: { marginBottom: '20px' },
   label: {
     display: 'flex', justifyContent: 'space-between',
@@ -258,7 +284,7 @@ const styles = {
   },
   resultHeader: {
     display: 'flex', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: '16px'
+    alignItems: 'center', marginBottom: '16px', gap: '12px', flexWrap: 'wrap'
   },
   resultTitle: { color: '#1F4E79', margin: 0, fontSize: '17px' },
   clearBtn: {
@@ -274,24 +300,19 @@ const styles = {
   summaryBox: {
     backgroundColor: '#F8FAFC', borderRadius: '8px',
     padding: '20px', marginBottom: '20px',
-    border: '1px solid #E2E8F0'
+    border: '1px solid #E2E8F0', overflowX: 'auto'
   },
-  summaryHeading: {
+  mdHeading: {
     color: '#1F4E79', fontSize: '16px',
     margin: '20px 0 8px 0', fontFamily: 'Georgia, serif'
   },
-  summarySubheading: {
+  mdSubheading: {
     color: '#2E75B6', fontSize: '14px',
     margin: '16px 0 6px 0', fontWeight: '600'
   },
-  summaryBullet: {
-    color: '#1E293B', fontSize: '14px',
-    padding: '3px 0 3px 16px', lineHeight: '1.6'
-  },
-  summaryPara: {
-    color: '#1E293B', fontSize: '14px',
-    lineHeight: '1.7', margin: '6px 0'
-  },
+  mdPara: { color: '#1E293B', fontSize: '14px', lineHeight: '1.7', margin: '6px 0' },
+  mdList: { margin: '6px 0', paddingLeft: '22px' },
+  mdItem: { color: '#1E293B', fontSize: '14px', lineHeight: '1.7', margin: '3px 0' },
   divider: { border: 'none', borderTop: '1px solid #E2E8F0', margin: '16px 0' },
   newBtn: {
     backgroundColor: '#1F4E79', color: 'white',
@@ -313,6 +334,19 @@ const styles = {
     display: '-webkit-box', WebkitLineClamp: 3,
     WebkitBoxOrient: 'vertical', overflow: 'hidden'
   },
+};
+
+// Styles for the Markdown elements inside the study guide
+const mdComponents = {
+  h1: ({ node, ...props }) => <h3 style={styles.mdHeading} {...props} />,
+  h2: ({ node, ...props }) => <h3 style={styles.mdHeading} {...props} />,
+  h3: ({ node, ...props }) => <h4 style={styles.mdSubheading} {...props} />,
+  h4: ({ node, ...props }) => <h4 style={styles.mdSubheading} {...props} />,
+  p: ({ node, ...props }) => <p style={styles.mdPara} {...props} />,
+  ul: ({ node, ...props }) => <ul style={styles.mdList} {...props} />,
+  ol: ({ node, ...props }) => <ol style={styles.mdList} {...props} />,
+  li: ({ node, ...props }) => <li style={styles.mdItem} {...props} />,
+  hr: () => <hr style={styles.divider} />,
 };
 
 export default Summariser;
